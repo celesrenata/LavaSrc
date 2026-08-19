@@ -160,7 +160,7 @@ public class LavaSrcPlugin implements AudioPlayerManagerConfiguration, SearchMan
 			}
 		}
 		if (sourcesConfig.isTidal()) {
-			this.tidal = new TidalSourceManager(pluginConfig.getProviders(), tidalConfig.getCountryCode(), unused -> this.manager, tidalConfig.getToken());
+			this.tidal = new TidalSourceManager(pluginConfig.getProviders(), tidalConfig.getCountryCode(), unused -> this.manager, tidalConfig.getClientId(), tidalConfig.getClientSecret(), tidalConfig.getToken());
 			if (tidalConfig.getSearchLimit() > 0) {
 				this.tidal.setSearchLimit(tidalConfig.getSearchLimit());
 			}

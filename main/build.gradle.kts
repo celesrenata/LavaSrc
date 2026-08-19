@@ -11,7 +11,7 @@ base {
 java {
     withJavadocJar()
     withSourcesJar()
-    sourceCompatibility = JavaVersion.VERSION_11
+    sourceCompatibility = JavaVersion.VERSION_17
 }
 
 dependencies {
@@ -42,7 +42,7 @@ publishing {
 }
 
 kotlin {
-    jvmToolchain(11)
+    jvmToolchain(17)
 }
 
 fun DependencyHandlerScope.lyricsDependency(module: String) {

@@ -6,9 +6,27 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "plugins.lavasrc.tidal")
 @Component
 public class TidalConfig {
+	private String clientId;
+	private String clientSecret;
 	private String countryCode;
 	private int searchLimit;
 	private String token;
+
+	public String getClientId() {
+		return this.clientId;
+	}
+
+	public void setClientId(String clientId) {
+		this.clientId = clientId;
+	}
+
+	public String getClientSecret() {
+		return this.clientSecret;
+	}
+
+	public void setClientSecret(String clientSecret) {
+		this.clientSecret = clientSecret;
+	}
 
 	public String getCountryCode() {
 		return this.countryCode;
