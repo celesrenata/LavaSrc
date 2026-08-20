@@ -67,11 +67,13 @@ public class TidalV2ApiClient {
      * @throws TidalApiException if the request fails after retries
      */
     public JsonNode searchTracks(String query, int limit) throws TidalApiException {
-        String encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8);
-        String url = BASE_URL + "/searchresults/" + encodedQuery
-            + "?include=tracks"
-            + "&page[limit]=" + limit
-            + "&filter[countryCode]=" + countryCode;
+        // The v2 search endpoint uses filter[query] as a query parameter, not a path segment.
+        // URLEncoder.encode produces '+' for spaces; query params accept '+' but we use %20 for safety.
+        String encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8).replace("+", "%20");
+        String url = BASE_URL + "/searchResults"
+            + "?filter%5Bquery%5D=" + encodedQuery
+            + "&countryCode=" + countryCode
+            + "&include=tracks";
 
         return executeWithRetry(url);
     }
@@ -86,7 +88,7 @@ public class TidalV2ApiClient {
     public JsonNode getTrack(String trackId) throws TidalApiException {
         String url = BASE_URL + "/tracks/" + trackId
             + "?include=artists,albums"
-            + "&filter[countryCode]=" + countryCode;
+            + "&countryCode=" + countryCode;
 
         return executeWithRetry(url);
     }
@@ -101,7 +103,7 @@ public class TidalV2ApiClient {
     public JsonNode getAlbum(String albumId) throws TidalApiException {
         String url = BASE_URL + "/albums/" + albumId
             + "?include=items"
-            + "&filter[countryCode]=" + countryCode;
+            + "&countryCode=" + countryCode;
 
         return executeWithRetry(url);
     }
@@ -116,7 +118,7 @@ public class TidalV2ApiClient {
     public JsonNode getPlaylist(String playlistUuid) throws TidalApiException {
         String url = BASE_URL + "/playlists/" + playlistUuid
             + "?include=items"
-            + "&filter[countryCode]=" + countryCode;
+            + "&countryCode=" + countryCode;
 
         return executeWithRetry(url);
     }
@@ -132,7 +134,7 @@ public class TidalV2ApiClient {
     public List<JsonNode> getAlbumTracks(String albumId, int maxTracks) throws TidalApiException {
         String initialUrl = BASE_URL + "/albums/" + albumId
             + "?include=items"
-            + "&filter[countryCode]=" + countryCode;
+            + "&countryCode=" + countryCode;
 
         return fetchPaginatedTracks(initialUrl, maxTracks);
     }
@@ -148,7 +150,7 @@ public class TidalV2ApiClient {
     public List<JsonNode> getPlaylistTracks(String playlistUuid, int maxTracks) throws TidalApiException {
         String initialUrl = BASE_URL + "/playlists/" + playlistUuid
             + "?include=items"
-            + "&filter[countryCode]=" + countryCode;
+            + "&countryCode=" + countryCode;
 
         return fetchPaginatedTracks(initialUrl, maxTracks);
     }
@@ -320,6 +322,8 @@ public class TidalV2ApiClient {
             throw new TidalApiException("Failed to obtain auth token for Tidal API request", e);
         }
 
+        log.info("Tidal: Requesting URL: {}", url);
+
         HttpGet request = new HttpGet(url);
         request.setHeader("Authorization", "Bearer " + token);
         request.setHeader("Accept", JSONAPI_MEDIA_TYPE);
@@ -328,9 +332,11 @@ public class TidalV2ApiClient {
              CloseableHttpResponse response = httpInterface.execute(request)) {
 
             int statusCode = response.getStatusLine().getStatusCode();
+            log.info("Tidal: Response status {} for URL: {}", statusCode, url);
 
             if (statusCode >= 200 && statusCode < 300) {
                 String responseBody = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
+                log.info("Tidal: Response body length: {} chars", responseBody.length());
                 JsonNode body = objectMapper.readTree(responseBody);
                 return RequestOutcome.success(body);
             }

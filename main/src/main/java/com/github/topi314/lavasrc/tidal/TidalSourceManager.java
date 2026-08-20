@@ -128,12 +128,48 @@ public class TidalSourceManager extends MirroringAudioSourceManager {
 	private AudioItem getSearch(String query) throws TidalApiException {
 		JsonNode document = apiClient.searchTracks(query, searchLimit);
 		if (document == null) {
+			log.warn("Tidal: searchTracks returned null for query '{}'", query);
 			return AudioReference.NO_TRACK;
 		}
 
-		// Extract track resources from the included array
+		// The search response includes track resources in the 'included' array,
+		// but they lack relationships (no artist/album info). We extract the track IDs
+		// and fetch each individually with include=artists,albums for full metadata.
 		JsonNode included = document.path("included");
-		List<AudioTrack> tracks = parseTracksFromIncluded(included);
+		List<String> trackIds = new ArrayList<>();
+		if (included.isArray()) {
+			for (JsonNode resource : included) {
+				if ("tracks".equals(resource.path("type").asText(""))) {
+					String id = resource.path("id").asText("");
+					if (!id.isEmpty()) {
+						trackIds.add(id);
+					}
+				}
+			}
+		}
+
+		if (trackIds.isEmpty()) {
+			log.info("Tidal: No tracks found in search results for '{}'", query);
+			return AudioReference.NO_TRACK;
+		}
+
+		// Fetch each track individually to get full metadata (artist, album, duration)
+		List<AudioTrack> tracks = new ArrayList<>();
+		for (String trackId : trackIds) {
+			if (tracks.size() >= searchLimit) break;
+			try {
+				JsonNode trackDoc = apiClient.getTrack(trackId);
+				if (trackDoc == null) continue;
+				JsonNode data = trackDoc.path("data");
+				JsonNode trackIncluded = trackDoc.path("included");
+				TidalTrackInfo info = jsonApiParser.parseTrack(data, trackIncluded);
+				if (!info.getId().isEmpty() && info.getDurationMs() > 0) {
+					tracks.add(new TidalAudioTrack(info.toAudioTrackInfo(), this));
+				}
+			} catch (TidalApiException e) {
+				log.debug("Tidal: Failed to fetch track {} during search enrichment: {}", trackId, e.getMessage());
+			}
+		}
 
 		if (tracks.isEmpty()) {
 			return AudioReference.NO_TRACK;
