@@ -12,6 +12,7 @@ public class TidalTrackInfo {
     private final String title;
     private final String artistName;
     private final String albumName;
+    private final String albumId;
     private final String albumArtUrl;
     private final String isrc;
     private final long durationMs;
@@ -20,10 +21,16 @@ public class TidalTrackInfo {
 
     public TidalTrackInfo(String id, String title, String artistName, String albumName,
                           String albumArtUrl, String isrc, long durationMs, int trackNumber) {
+        this(id, title, artistName, albumName, null, albumArtUrl, isrc, durationMs, trackNumber);
+    }
+
+    public TidalTrackInfo(String id, String title, String artistName, String albumName,
+                          String albumId, String albumArtUrl, String isrc, long durationMs, int trackNumber) {
         this.id = id;
         this.title = title;
         this.artistName = artistName;
         this.albumName = albumName;
+        this.albumId = albumId;
         this.albumArtUrl = albumArtUrl;
         this.isrc = isrc;
         this.durationMs = durationMs;
@@ -61,6 +68,17 @@ public class TidalTrackInfo {
 
     public String getAlbumName() {
         return albumName;
+    }
+
+    public String getAlbumId() {
+        return albumId;
+    }
+
+    public String getAlbumUrl() {
+        if (albumId != null && !albumId.isEmpty()) {
+            return "https://tidal.com/album/" + albumId;
+        }
+        return null;
     }
 
     public String getAlbumArtUrl() {

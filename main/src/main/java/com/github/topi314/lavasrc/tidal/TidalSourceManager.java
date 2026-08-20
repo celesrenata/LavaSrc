@@ -75,6 +75,16 @@ public class TidalSourceManager extends MirroringAudioSourceManager {
 		this.searchLimit = searchLimit;
 	}
 
+	/**
+	 * Updates the Tidal token at runtime (pushed by the bot after refresh).
+	 * Delegates to the token manager which handles both static and client_credentials modes.
+	 */
+	public void updateToken(String token) {
+		if (tokenManager != null) {
+			tokenManager.updateCredentials(null, null, token);
+		}
+	}
+
 	@Override
 	public String getSourceName() {
 		return "tidal";
@@ -108,6 +118,8 @@ public class TidalSourceManager extends MirroringAudioSourceManager {
 						return loadPlaylist(resource.getId());
 					case SEARCH:
 						return getSearch(resource.getId());
+					case ALBUM_SEARCH:
+						return getAlbumSearch(resource.getId());
 					case ISRC_SEARCH:
 						return getSearch(resource.getId());
 					default:
@@ -164,7 +176,8 @@ public class TidalSourceManager extends MirroringAudioSourceManager {
 				JsonNode trackIncluded = trackDoc.path("included");
 				TidalTrackInfo info = jsonApiParser.parseTrack(data, trackIncluded);
 				if (!info.getId().isEmpty() && info.getDurationMs() > 0) {
-					tracks.add(new TidalAudioTrack(info.toAudioTrackInfo(), this));
+					tracks.add(new TidalAudioTrack(info.toAudioTrackInfo(),
+						info.getAlbumName(), info.getAlbumUrl(), null, null, this));
 				}
 			} catch (TidalApiException e) {
 				log.debug("Tidal: Failed to fetch track {} during search enrichment: {}", trackId, e.getMessage());
@@ -176,6 +189,38 @@ public class TidalSourceManager extends MirroringAudioSourceManager {
 		}
 
 		return new BasicAudioPlaylist("Tidal Search: " + query, tracks, null, true);
+	}
+
+	private AudioItem getAlbumSearch(String query) throws TidalApiException {
+		JsonNode document = apiClient.searchAlbums(query, searchLimit);
+		if (document == null) {
+			log.warn("Tidal: searchAlbums returned null for query '{}'", query);
+			return AudioReference.NO_TRACK;
+		}
+
+		// Extract album IDs from the included array
+		JsonNode included = document.path("included");
+		List<String> albumIds = new ArrayList<>();
+		if (included.isArray()) {
+			for (JsonNode resource : included) {
+				if ("albums".equals(resource.path("type").asText(""))) {
+					String id = resource.path("id").asText("");
+					if (!id.isEmpty()) {
+						albumIds.add(id);
+					}
+				}
+			}
+		}
+
+		if (albumIds.isEmpty()) {
+			log.info("Tidal: No albums found in search results for '{}'", query);
+			return AudioReference.NO_TRACK;
+		}
+
+		// Load the first matching album fully (with tracks)
+		String bestAlbumId = albumIds.get(0);
+		log.debug("Tidal: Album search '{}' found {} albums, loading first: {}", query, albumIds.size(), bestAlbumId);
+		return loadAlbum(bestAlbumId);
 	}
 
 	private AudioItem loadTrack(String trackId) throws TidalApiException {
@@ -192,20 +237,31 @@ public class TidalSourceManager extends MirroringAudioSourceManager {
 			return AudioReference.NO_TRACK;
 		}
 
-		return new TidalAudioTrack(trackInfo.toAudioTrackInfo(), this);
+		return new TidalAudioTrack(trackInfo.toAudioTrackInfo(),
+			trackInfo.getAlbumName(), trackInfo.getAlbumUrl(), null, null, this);
 	}
 
 	private AudioItem loadAlbum(String albumId) throws TidalApiException {
-		List<JsonNode> trackNodes = apiClient.getAlbumTracks(albumId, ALBUM_MAX_PAGE_ITEMS);
+		var result = apiClient.getAlbumTracksWithIncluded(albumId, ALBUM_MAX_PAGE_ITEMS);
+		List<JsonNode> trackNodes = result.getTracks();
 		if (trackNodes.isEmpty()) {
 			return AudioReference.NO_TRACK;
 		}
 
+		// Build a combined included array as a JsonNode for the parser
+		var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+		var includedArray = mapper.createArrayNode();
+		for (JsonNode inc : result.getAllIncluded()) {
+			includedArray.add(inc);
+		}
+
 		List<AudioTrack> tracks = new ArrayList<>();
+		String albumUrl = "https://tidal.com/album/" + albumId;
 		for (JsonNode trackNode : trackNodes) {
-			TidalTrackInfo info = jsonApiParser.parseTrack(trackNode, null);
+			TidalTrackInfo info = jsonApiParser.parseTrack(trackNode, includedArray);
 			if (!info.getId().isEmpty() && info.getDurationMs() > 0) {
-				tracks.add(new TidalAudioTrack(info.toAudioTrackInfo(), this));
+				tracks.add(new TidalAudioTrack(info.toAudioTrackInfo(),
+					info.getAlbumName(), albumUrl, null, null, this));
 			}
 		}
 
@@ -213,8 +269,6 @@ public class TidalSourceManager extends MirroringAudioSourceManager {
 			return AudioReference.NO_TRACK;
 		}
 
-		// Use first track info for album metadata
-		String albumUrl = "https://tidal.com/album/" + albumId;
 		return new TidalAudioPlaylist(
 			"Tidal Album: " + albumId,
 			tracks,
@@ -227,16 +281,25 @@ public class TidalSourceManager extends MirroringAudioSourceManager {
 	}
 
 	private AudioItem loadPlaylist(String playlistUuid) throws TidalApiException {
-		List<JsonNode> trackNodes = apiClient.getPlaylistTracks(playlistUuid, PLAYLIST_MAX_PAGE_ITEMS);
+		var result = apiClient.getPlaylistTracksWithIncluded(playlistUuid, PLAYLIST_MAX_PAGE_ITEMS);
+		List<JsonNode> trackNodes = result.getTracks();
 		if (trackNodes.isEmpty()) {
 			return AudioReference.NO_TRACK;
 		}
 
+		// Build a combined included array as a JsonNode for the parser
+		var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+		var includedArray = mapper.createArrayNode();
+		for (JsonNode inc : result.getAllIncluded()) {
+			includedArray.add(inc);
+		}
+
 		List<AudioTrack> tracks = new ArrayList<>();
 		for (JsonNode trackNode : trackNodes) {
-			TidalTrackInfo info = jsonApiParser.parseTrack(trackNode, null);
+			TidalTrackInfo info = jsonApiParser.parseTrack(trackNode, includedArray);
 			if (!info.getId().isEmpty() && info.getDurationMs() > 0) {
-				tracks.add(new TidalAudioTrack(info.toAudioTrackInfo(), this));
+				tracks.add(new TidalAudioTrack(info.toAudioTrackInfo(),
+					info.getAlbumName(), info.getAlbumUrl(), null, null, this));
 			}
 		}
 
@@ -270,7 +333,8 @@ public class TidalSourceManager extends MirroringAudioSourceManager {
 			if ("tracks".equals(type)) {
 				TidalTrackInfo info = jsonApiParser.parseTrack(resource, included);
 				if (!info.getId().isEmpty() && info.getDurationMs() > 0) {
-					tracks.add(new TidalAudioTrack(info.toAudioTrackInfo(), this));
+					tracks.add(new TidalAudioTrack(info.toAudioTrackInfo(),
+						info.getAlbumName(), info.getAlbumUrl(), null, null, this));
 				}
 			}
 		}

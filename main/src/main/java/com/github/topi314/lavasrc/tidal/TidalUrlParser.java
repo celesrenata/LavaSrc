@@ -21,8 +21,7 @@ public final class TidalUrlParser {
      * etc., with optional trailing path segments and query parameters.
      */
     public static final Pattern URL_PATTERN = Pattern.compile(
-        "https?://(?:(?:listen|www)\\.)?tidal\\.com/(?:browse/)?(?<type>track|album|playlist)/(?<id>[a-zA-Z0-9\\-]+)(?:/.*)?(?:\\?.*)?"
-    );
+        "https?://(?:(?:listen|www)\\.)?tidal\\.com/(?:browse/)?(?<type>track|album|playlist)/(?<id>[a-zA-Z0-9\\-]+)(?:/.*)?(?:\\?.*)?");
 
     /**
      * The search prefix for text-based Tidal searches.
@@ -33,6 +32,11 @@ public final class TidalUrlParser {
      * The ISRC search prefix (must appear after SEARCH_PREFIX).
      */
     public static final String ISRC_PREFIX = "isrc:";
+
+    /**
+     * The album search prefix (must appear after SEARCH_PREFIX).
+     */
+    public static final String ALBUM_PREFIX = "album:";
 
     private TidalUrlParser() {
         // utility class - not instantiable
@@ -46,6 +50,7 @@ public final class TidalUrlParser {
         ALBUM,
         PLAYLIST,
         SEARCH,
+        ALBUM_SEARCH,
         ISRC_SEARCH
     }
 
@@ -113,6 +118,15 @@ public final class TidalUrlParser {
                     return Optional.empty();
                 }
                 return Optional.of(new TidalResource(ResourceType.ISRC_SEARCH, isrcCode));
+            }
+
+            // Check for album sub-prefix (tdsearch:album:{query})
+            if (remainder.startsWith(ALBUM_PREFIX)) {
+                String albumQuery = remainder.substring(ALBUM_PREFIX.length());
+                if (albumQuery.isEmpty()) {
+                    return Optional.empty();
+                }
+                return Optional.of(new TidalResource(ResourceType.ALBUM_SEARCH, albumQuery));
             }
 
             return Optional.of(new TidalResource(ResourceType.SEARCH, remainder));

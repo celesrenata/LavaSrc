@@ -357,6 +357,13 @@ public class LavaSrcPlugin implements AudioPlayerManagerConfiguration, SearchMan
 			}
 		}
 
+		var tidalConfig = config.getTidal();
+		if (tidalConfig != null && this.tidal != null) {
+			if (tidalConfig.getToken() != null) {
+				this.tidal.updateToken(tidalConfig.getToken());
+			}
+		}
+
 		var qobuzConfig = config.getQobuz();
 		if (qobuzConfig != null && this.qobuz != null) {
 			if (qobuzConfig.getUserOauthToken() != null) {

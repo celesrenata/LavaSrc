@@ -79,6 +79,24 @@ public class TidalV2ApiClient {
     }
 
     /**
+     * Searches Tidal for albums matching the given query.
+     *
+     * @param query the search query string
+     * @param limit maximum number of album results desired
+     * @return the full JSON:API compound document with albums (and their artists) in included
+     * @throws TidalApiException if the request fails after retries
+     */
+    public JsonNode searchAlbums(String query, int limit) throws TidalApiException {
+        String encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8).replace("+", "%20");
+        String url = BASE_URL + "/searchResults"
+            + "?filter%5Bquery%5D=" + encodedQuery
+            + "&countryCode=" + countryCode
+            + "&include=albums,albums.artists";
+
+        return executeWithRetry(url);
+    }
+
+    /**
      * Fetches a single track by ID with artist and album includes.
      *
      * @param trackId the Tidal track ID
@@ -133,10 +151,26 @@ public class TidalV2ApiClient {
      */
     public List<JsonNode> getAlbumTracks(String albumId, int maxTracks) throws TidalApiException {
         String initialUrl = BASE_URL + "/albums/" + albumId
-            + "?include=items"
+            + "?include=items,items.artists,items.albums"
             + "&countryCode=" + countryCode;
 
         return fetchPaginatedTracks(initialUrl, maxTracks);
+    }
+
+    /**
+     * Fetches all tracks from an album with full relationship data (artists, albums).
+     *
+     * @param albumId   the Tidal album ID
+     * @param maxTracks maximum number of tracks to accumulate
+     * @return PaginatedTracksResult with tracks and all included resources
+     * @throws TidalApiException if the request fails after retries
+     */
+    public PaginatedTracksResult getAlbumTracksWithIncluded(String albumId, int maxTracks) throws TidalApiException {
+        String initialUrl = BASE_URL + "/albums/" + albumId
+            + "?include=items,items.artists,items.albums"
+            + "&countryCode=" + countryCode;
+
+        return fetchPaginatedTracksWithIncluded(initialUrl, maxTracks);
     }
 
     /**
@@ -149,27 +183,70 @@ public class TidalV2ApiClient {
      */
     public List<JsonNode> getPlaylistTracks(String playlistUuid, int maxTracks) throws TidalApiException {
         String initialUrl = BASE_URL + "/playlists/" + playlistUuid
-            + "?include=items"
+            + "?include=items,items.artists,items.albums"
             + "&countryCode=" + countryCode;
 
         return fetchPaginatedTracks(initialUrl, maxTracks);
     }
 
+    /**
+     * Fetches all tracks from a playlist with full relationship data (artists, albums).
+     *
+     * @param playlistUuid the Tidal playlist UUID
+     * @param maxTracks    maximum number of tracks to accumulate
+     * @return PaginatedTracksResult with tracks and all included resources
+     * @throws TidalApiException if the request fails after retries
+     */
+    public PaginatedTracksResult getPlaylistTracksWithIncluded(String playlistUuid, int maxTracks) throws TidalApiException {
+        String initialUrl = BASE_URL + "/playlists/" + playlistUuid
+            + "?include=items,items.artists,items.albums"
+            + "&countryCode=" + countryCode;
+
+        return fetchPaginatedTracksWithIncluded(initialUrl, maxTracks);
+    }
+
     // ─── Pagination ──────────────────────────────────────────────────────────────
+
+    /**
+     * Result container for paginated collection fetches.
+     * Contains the extracted track nodes and the full included array
+     * (with artists, albums, etc.) needed for relationship resolution.
+     */
+    public static class PaginatedTracksResult {
+        private final List<JsonNode> tracks;
+        private final List<JsonNode> allIncluded;
+
+        public PaginatedTracksResult(List<JsonNode> tracks, List<JsonNode> allIncluded) {
+            this.tracks = tracks;
+            this.allIncluded = allIncluded;
+        }
+
+        public List<JsonNode> getTracks() {
+            return tracks;
+        }
+
+        public List<JsonNode> getAllIncluded() {
+            return allIncluded;
+        }
+    }
 
     /**
      * Fetches tracks from a paginated collection endpoint, following cursor links
      * until no more pages exist or maxTracks is reached.
+     * Returns both the track nodes and the full included array for relationship resolution.
      */
-    private List<JsonNode> fetchPaginatedTracks(String initialUrl, int maxTracks) throws TidalApiException {
+    private PaginatedTracksResult fetchPaginatedTracksWithIncluded(String initialUrl, int maxTracks) throws TidalApiException {
         List<JsonNode> allTracks = new ArrayList<>();
+        List<JsonNode> allIncluded = new ArrayList<>();
 
         JsonNode document = executeWithRetry(initialUrl);
         if (document == null) {
-            return Collections.emptyList();
+            return new PaginatedTracksResult(Collections.emptyList(), Collections.emptyList());
         }
 
-        // Extract track resources from the included array
+        // Accumulate ALL included resources (tracks, artists, albums, etc.)
+        accumulateIncluded(document, allIncluded);
+        // Extract just the track nodes for the caller
         extractTracksFromIncluded(document, allTracks, maxTracks);
 
         // Follow pagination cursors
@@ -180,7 +257,6 @@ public class TidalV2ApiClient {
             }
 
             String nextPageUrl = nextUrl.get();
-            // If the URL is relative, prepend the base
             if (!nextPageUrl.startsWith("http")) {
                 nextPageUrl = "https://openapi.tidal.com" + nextPageUrl;
             }
@@ -191,11 +267,32 @@ public class TidalV2ApiClient {
                 break;
             }
 
+            accumulateIncluded(document, allIncluded);
             extractTracksFromIncluded(document, allTracks, maxTracks);
         }
 
-        log.debug("Tidal: Pagination complete, accumulated {} tracks total", allTracks.size());
-        return allTracks;
+        log.debug("Tidal: Pagination complete, accumulated {} tracks, {} included resources", allTracks.size(), allIncluded.size());
+        return new PaginatedTracksResult(allTracks, allIncluded);
+    }
+
+    /**
+     * Fetches tracks from a paginated collection endpoint (legacy — returns only track nodes).
+     */
+    private List<JsonNode> fetchPaginatedTracks(String initialUrl, int maxTracks) throws TidalApiException {
+        return fetchPaginatedTracksWithIncluded(initialUrl, maxTracks).getTracks();
+    }
+
+    /**
+     * Accumulates all resources from the document's included array.
+     */
+    private void accumulateIncluded(JsonNode document, List<JsonNode> accumulator) {
+        JsonNode included = document.path("included");
+        if (!included.isArray()) {
+            return;
+        }
+        for (JsonNode resource : included) {
+            accumulator.add(resource);
+        }
     }
 
     /**

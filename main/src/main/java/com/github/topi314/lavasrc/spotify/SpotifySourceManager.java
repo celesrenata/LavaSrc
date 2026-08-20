@@ -502,11 +502,19 @@ public class SpotifySourceManager extends MirroringAudioSourceManager implements
 			page = this.getJson(API_BASE + "albums/" + id + "/tracks?limit=" + ALBUM_MAX_PAGE_ITEMS + "&offset=" + offset);
 			offset += ALBUM_MAX_PAGE_ITEMS;
 
-			var trackIs = page.get("items").values().stream().map(track -> track.get("id").text()).collect(Collectors.joining(","));
+			for (var simplifiedTrack : page.get("items").values()) {
+				var trackId = simplifiedTrack.get("id").text();
+				if (trackId == null || trackId.isEmpty()) {
+					continue;
+				}
 
-			JsonBrowser tracksPage = this.getJson(API_BASE + "tracks/?ids=" + trackIs);
+				// Fetch full track details individually (batch /v1/tracks?ids= is 403'd
+				// by Spotify for apps in development/restricted mode).
+				JsonBrowser track = this.getJson(API_BASE + "tracks/" + trackId);
+				if (track == null || track.get("id").isNull()) {
+					continue;
+				}
 
-			for (var track : tracksPage.get("tracks").values()) {
 				var albumJson = JsonBrowser.newMap();
 				albumJson.put("external_urls", json.get("external_urls"));
 				albumJson.put("name", json.get("name"));
@@ -514,9 +522,9 @@ public class SpotifySourceManager extends MirroringAudioSourceManager implements
 				track.put("album", albumJson);
 
 				track.get("artists").index(0).put("images", artistJson.get("images"));
-			}
 
-			tracks.addAll(this.parseTracks(tracksPage, preview));
+				tracks.add(this.parseTrack(track, preview));
+			}
 		} while (page.get("next").text() != null && ++pages < this.albumPageLimit);
 
 		if (tracks.isEmpty()) {

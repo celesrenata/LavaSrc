@@ -43,13 +43,15 @@ public class JsonApiParser {
 
         // Resolve album name and artwork from relationships
         String albumName = "";
+        String albumId = "";
         String albumArtUrl = "";
         JsonNode albumRelData = resource.path("relationships").path("albums").path("data");
         if (albumRelData.isArray() && albumRelData.size() > 0) {
             JsonNode firstAlbumRef = albumRelData.get(0);
+            albumId = textOrEmpty(firstAlbumRef, "id");
             Optional<JsonNode> albumResource = resolveRelationship(
                 textOrEmpty(firstAlbumRef, "type"),
-                textOrEmpty(firstAlbumRef, "id"),
+                albumId,
                 included
             );
             if (albumResource.isPresent()) {
@@ -59,7 +61,7 @@ public class JsonApiParser {
             }
         }
 
-        return new TidalTrackInfo(id, title, artistName, albumName, albumArtUrl, isrc, durationMs, trackNumber);
+        return new TidalTrackInfo(id, title, artistName, albumName, albumId, albumArtUrl, isrc, durationMs, trackNumber);
     }
 
     /**

@@ -96,7 +96,10 @@ public class TidalTokenManager {
         }
 
         if (!useClientCredentials) {
-            // Static token mode — return directly without refresh
+            // Static token mode — return runtime-updated token if available, otherwise static
+            if (cachedToken != null && tokenExpiry != null && Instant.now().isBefore(tokenExpiry)) {
+                return cachedToken;
+            }
             return staticToken;
         }
 
@@ -217,6 +220,27 @@ public class TidalTokenManager {
             httpInterfaceManager.close();
         } catch (IOException e) {
             log.error("Failed to close Tidal token manager HTTP interface", e);
+        }
+    }
+
+    /**
+     * Updates credentials at runtime. Supports updating the token and/or switching to
+     * client_credentials mode. Called by the PATCH /v4/lavasrc/config endpoint.
+     *
+     * In static token mode (no clientId/clientSecret), this replaces the stale
+     * cached token with a fresh one pushed by the bot. The updated token is used
+     * until it expires (4h assumed) or is replaced by another push.
+     *
+     * @param newClientId     new OAuth client ID (null to keep current)
+     * @param newClientSecret new OAuth client secret (null to keep current)
+     * @param newToken        new access token (null to keep current)
+     */
+    public synchronized void updateCredentials(String newClientId, String newClientSecret, String newToken) {
+        if (newToken != null && !newToken.isEmpty()) {
+            this.cachedToken = newToken;
+            this.tokenExpiry = Instant.now().plusSeconds(14400); // Assume 4h validity
+            this.disabled = false;
+            log.info("Tidal: Token updated at runtime (len={})", newToken.length());
         }
     }
 
