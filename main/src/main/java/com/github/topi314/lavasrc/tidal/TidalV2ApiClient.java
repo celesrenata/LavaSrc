@@ -178,19 +178,24 @@ public class TidalV2ApiClient {
      *
      * @param playlistUuid the Tidal playlist UUID
      * @param maxTracks    maximum number of tracks to accumulate
-     * @return list of track resource JsonNodes from the included array, or empty list if not found
+     * @return list of track resource JsonNodes, or empty list if not found
      * @throws TidalApiException if the request fails after retries
      */
     public List<JsonNode> getPlaylistTracks(String playlistUuid, int maxTracks) throws TidalApiException {
-        String initialUrl = BASE_URL + "/playlists/" + playlistUuid
-            + "?include=items,items.artists,items.albums"
-            + "&countryCode=" + countryCode;
-
-        return fetchPaginatedTracks(initialUrl, maxTracks);
+        return getPlaylistTracksWithIncluded(playlistUuid, maxTracks).getTracks();
     }
 
     /**
      * Fetches all tracks from a playlist with full relationship data (artists, albums).
+     *
+     * <p>Uses a two-phase approach to work around the Tidal v2 API's 20-item-per-page
+     * limit on included resources:
+     * <ol>
+     *   <li>Paginates through {@code /playlists/{uuid}/relationships/items} to collect
+     *       ALL track IDs (following cursor links)</li>
+     *   <li>Batch-fetches full track resources (with artists/albums) in groups of 20
+     *       using {@code GET /tracks?filter[id]=...&include=artists,albums}</li>
+     * </ol>
      *
      * @param playlistUuid the Tidal playlist UUID
      * @param maxTracks    maximum number of tracks to accumulate
@@ -198,11 +203,103 @@ public class TidalV2ApiClient {
      * @throws TidalApiException if the request fails after retries
      */
     public PaginatedTracksResult getPlaylistTracksWithIncluded(String playlistUuid, int maxTracks) throws TidalApiException {
-        String initialUrl = BASE_URL + "/playlists/" + playlistUuid
-            + "?include=items,items.artists,items.albums"
-            + "&countryCode=" + countryCode;
+        // Phase 1: Collect all track IDs via the paginated relationship endpoint
+        List<String> trackIds = getPlaylistItemIds(playlistUuid, maxTracks);
+        if (trackIds.isEmpty()) {
+            return new PaginatedTracksResult(Collections.emptyList(), Collections.emptyList());
+        }
 
-        return fetchPaginatedTracksWithIncluded(initialUrl, maxTracks);
+        log.debug("Tidal: Playlist {} has {} track IDs, batch-fetching details", playlistUuid, trackIds.size());
+
+        // Phase 2: Batch-fetch track details with includes (max 20 per request)
+        List<JsonNode> allTracks = new ArrayList<>();
+        List<JsonNode> allIncluded = new ArrayList<>();
+        int batchSize = 20; // Tidal v2 API max per filter[id] request
+
+        for (int i = 0; i < trackIds.size(); i += batchSize) {
+            List<String> batch = trackIds.subList(i, Math.min(i + batchSize, trackIds.size()));
+            String ids = String.join(",", batch);
+            String url = BASE_URL + "/tracks"
+                + "?filter%5Bid%5D=" + ids
+                + "&include=artists,albums"
+                + "&countryCode=" + countryCode;
+
+            log.debug("Tidal: Batch-fetching tracks {}-{} of {}", i + 1, i + batch.size(), trackIds.size());
+            JsonNode document = executeWithRetry(url);
+            if (document == null) {
+                continue;
+            }
+
+            // The /tracks batch endpoint returns tracks in the data array
+            JsonNode data = document.path("data");
+            if (data.isArray()) {
+                for (JsonNode trackResource : data) {
+                    if ("tracks".equals(trackResource.path("type").asText(""))) {
+                        allTracks.add(trackResource);
+                    }
+                }
+            }
+
+            // Accumulate included resources (artists, albums)
+            accumulateIncluded(document, allIncluded);
+        }
+
+        log.debug("Tidal: Playlist fetch complete, got {} tracks, {} included resources",
+            allTracks.size(), allIncluded.size());
+        return new PaginatedTracksResult(allTracks, allIncluded);
+    }
+
+    /**
+     * Paginates through a playlist's relationship items endpoint to collect all track IDs.
+     * The relationship endpoint returns resource identifier objects ({type, id}) with
+     * proper cursor-based pagination at the top level.
+     *
+     * @param playlistUuid the Tidal playlist UUID
+     * @param maxTracks    maximum number of IDs to collect
+     * @return ordered list of track IDs
+     * @throws TidalApiException if the request fails after retries
+     */
+    private List<String> getPlaylistItemIds(String playlistUuid, int maxTracks) throws TidalApiException {
+        List<String> trackIds = new ArrayList<>();
+        String url = BASE_URL + "/playlists/" + playlistUuid + "/relationships/items"
+            + "?countryCode=" + countryCode;
+
+        while (trackIds.size() < maxTracks) {
+            JsonNode document = executeWithRetry(url);
+            if (document == null) {
+                break;
+            }
+
+            // Relationship endpoint returns data as an array of {type, id} resource identifiers
+            JsonNode data = document.path("data");
+            if (data.isArray()) {
+                for (JsonNode item : data) {
+                    if (trackIds.size() >= maxTracks) break;
+                    String id = item.path("id").asText("");
+                    if (!id.isEmpty()) {
+                        trackIds.add(id);
+                    }
+                }
+            } else {
+                break;
+            }
+
+            // Follow cursor pagination
+            var nextUrl = jsonApiParser.getNextPageUrl(document);
+            if (nextUrl.isEmpty()) {
+                break;
+            }
+
+            url = nextUrl.get();
+            if (!url.startsWith("http")) {
+                url = "https://openapi.tidal.com" + url;
+            }
+
+            log.debug("Tidal: Following playlist items cursor, collected {} IDs so far", trackIds.size());
+        }
+
+        log.debug("Tidal: Collected {} track IDs from playlist {}", trackIds.size(), playlistUuid);
+        return trackIds;
     }
 
     // ─── Pagination ──────────────────────────────────────────────────────────────
